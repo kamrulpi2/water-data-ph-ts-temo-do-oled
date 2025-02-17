@@ -1,0 +1,155 @@
+#include <Arduino.h>
+#if defined(ESP32)
+#include <WiFi.h>
+#elif defined(ESP8266)
+#include <ESP8266WiFi.h>
+
+#endif
+#include <Firebase_ESP_Client.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+// Firebase credentials
+#define WIFI_SSID "Engineers Home"
+#define WIFI_PASSWORD "sky12345"
+#define API_KEY "AIzaSyCCn5ffPlhAt8"
+#define DATABASE_URL "tuhb.firebaseio.com/"
+
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+bool signupOK = false;
+
+// OLED settings
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// Pins for sensors
+#define TDS_PIN 2       // Example for TDS sensor (adjust for your pin setup)
+#define ONE_WIRE_BUS 4  // Temperature sensor connected to pin D4
+#define PH_PIN 35       // Example for pH sensor (adjust for your pin setup)
+
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);  // Temperature sensor DS18B20
+
+// Variables for simulated values
+int tdsValue = 160;     // Initial TDS value
+float phValue = 6.0;    // Initial pH value
+unsigned long lastPHUpdateTime = 0;
+
+void setup() {
+  Serial.begin(115200);
+
+  // Initialize OLED display
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for (;;) {}
+  }
+
+  // Start the temperature sensor
+  sensors.begin();
+
+  // Connect to WiFi
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(300);
+  }
+  Serial.println();
+  Serial.print("Connected with IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.println();
+
+  // Initialize Firebase
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+
+  if (Firebase.signUp(&config, &auth, "", "")) {
+    Serial.println("Sign up successful");
+    signupOK = true;
+  } else {
+    Serial.printf("Sign up failed: %s\n", config.signer.signupError.message.c_str());
+  }
+
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+}
+
+float readPH() {
+  // Simulate pH changing between 6 and 8.5 every 30 seconds
+  if (millis() - lastPHUpdateTime >= 30000) {
+    lastPHUpdateTime = millis();
+    phValue += 0.1;
+    if (phValue > 8.5) phValue = 6.0;  // Reset back to 6.0 when exceeding 8.5
+  }
+  return phValue;
+}
+
+void loop() {
+  delay(1000);
+
+  // Reading temperature
+  sensors.requestTemperatures();
+  float tempC = sensors.getTempCByIndex(0);  // Read temperature in Celsius
+
+  // Simulate TDS value cycling between 160 and 450
+  tdsValue += 10;
+  if (tdsValue > 450) tdsValue = 160;  // Reset to 160 after reaching 450
+
+  // Convert TDS to real value (example, adjust for your specific sensor)
+  float tdsVoltage = tdsValue * (5.0 / 4095.0); // Convert to voltage
+  int tdsConcentration = (tdsVoltage * 133.42 * 2.5 + 500); // Example formula for TDS
+
+  // Reading simulated pH sensor value
+  float phValue = readPH();
+
+  // Display values on OLED
+  display.clearDisplay();
+  display.setTextSize(2);
+
+  // Display Temperature
+  display.setCursor(0, 0);
+  display.print("Temp:");
+  display.print(tempC);
+  display.setTextSize(1);
+  display.print("C");
+
+  // Display TDS
+  display.setTextSize(2);
+  display.setCursor(0, 18);
+  display.print("TDS:");
+  display.print(tdsConcentration);
+  display.setTextSize(1);
+  display.print("ppm");
+
+  // Display pH
+  display.setTextSize(2);
+  display.setCursor(0, 35);
+  display.print("pH: ");
+  display.print(phValue);
+  
+  // Display Team Name
+  display.setTextSize(1);
+  display.setCursor(0, 52);
+  display.print("......TEAM:NAF-24......");
+
+  display.display();
+
+  // Send data to Firebase
+  if (Firebase.ready() && signupOK) {
+    Firebase.RTDB.set(&fbdo, "/water-Temp", String(tempC));
+    Firebase.RTDB.set(&fbdo, "/water-TDS", String(tdsConcentration));
+    Firebase.RTDB.set(&fbdo, "/water-pH", String(phValue));
+  } else {
+    Serial.println("Firebase not ready or signup failed");
+    Serial.println("Reason: " + fbdo.errorReason());
+  }
+}
